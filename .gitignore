@@ -1,2 +1,4 @@
 # Directory for output plots
-./output
+./output/*
+
+.DS_store
