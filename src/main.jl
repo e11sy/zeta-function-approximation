@@ -3,6 +3,8 @@ using Printf
 using Plots
 using LinearAlgebra
 
+setprecision(1024)
+
 # Читаем все строки из файла и преобразуем их в массив комплексных чисел
 function read_zeta_zeros(filename)
     zeros = Vector{ArbComplex}([])
@@ -14,13 +16,6 @@ function read_zeta_zeros(filename)
             push!(zeros, ArbComplex(0.5, imag_part))  # Создаём комплексное число 0.5 + i*imag_part
             push!(zeros, ArbComplex(0.5, -imag_part))  # Создаём комплексное число 0.5 + i*imag_part
         end
-
-        # for line in eachline(file)
-        #     imag_part = ArbReal(strip(line))  # Парсим строку в число
-
-        #     push!(zeros, ArbComplex(0.5, -imag_part))  # Создаём комплексное число 0.5 + i*imag_part
-        # end
-
     end
     return zeros
 end
@@ -40,55 +35,141 @@ end
 
 
 # Custom Gaussian Elimination for ArbComplex types with partial pivoting
-function gaussian_elimination(A::Matrix{ArbComplex{128}}, B::Vector{ArbComplex{128}})
+# function gaussian_elimination(A::Matrix{ArbComplex{1024}}, B::Vector{ArbComplex{1024}})
+#     n = size(A, 1)
+    
+#     # Create augmented matrix [A | B]
+#     println("Type of A: ", typeof(A))
+#     println("Type of B: ", typeof(B))
+#     Augmented = hcat(copy(A), copy(B))
+#     println("Type of Augmented: ", typeof(Augmented))
+
+    
+#     # Forward elimination with partial pivoting
+#     for i in 1:n
+#         # Find the pivot row (maximum element in the current column)
+#         _, rel_index = findmax(abs.(Augmented[i:n, i]))
+#         pivot_row = rel_index + i - 1
+
+#         # Swap rows if necessary
+#         if pivot_row != i
+#             Augmented[i, :], Augmented[pivot_row, :] = Augmented[pivot_row, :], Augmented[i, :]
+#         end
+        
+#         # Normalize the pivot row
+#         pivot = Augmented[i, i]
+
+#         if iszero(Augmented[pivot_row, i])
+#             error("Matrix is singular and cannot be solved.")
+#         end
+        
+#         if abs(Augmented[i, i]) < 1e-100
+#             println("WARNING: pivot at $i is nearly zero: ", Augmented[i, i])
+#         end
+
+#         for k in 1:n+1
+#             Augmented[i, k] /= pivot
+
+#             if isnan(real(Augmented[i, k])) || isnan(imag(Augmented[i, k]))
+#                 error("NaN detected after normalization at row $i, column $i Value: ", Augmented[i, k])
+#             end
+
+#         end
+        
+#         # Eliminate other rows
+#         for j in i+1:n
+#             factor = Augmented[j, i]
+#             for k in 1:n+1
+#                 Augmented[j, k] -= factor * Augmented[i, k]
+#             end
+#         end
+#     end
+
+#     # Back substitution
+#     X = Vector{ArbComplex{1024}}(undef, n)
+#     for i in n:-1:1
+#         # Start with the last element in the augmented matrix
+#         X[i] = Augmented[i, n+1]
+        
+#         # Subtract the known values of X from the right-hand side
+#         for j in i+1:n
+#             X[i] -= Augmented[i, j] * X[j]
+#         end
+#     end
+    
+#     return X
+# end
+
+function gaussian_elimination(A::Matrix{ArbComplex{P}}, B::Vector{ArbComplex{P}}; ε=ArbReal("1e-40")) where P
     n = size(A, 1)
-    
-    # Create augmented matrix [A | B]
-    Augmented = hcat(A, B)
-    
-    # Forward elimination with partial pivoting
+    Aug = hcat(A, B)  # Augmented matrix
+    row_perm = collect(1:n)
+    col_perm = collect(1:n)
+
     for i in 1:n
-        # Find the pivot row (maximum element in the current column)
-        pivot_row = argmax(abs.(Augmented[i:n, i]))[1] + i - 1
-        if iszero(Augmented[pivot_row, i])
-            error("Matrix is singular and cannot be solved.")
+        # Full pivoting: search maximum absolute value in submatrix
+        pivot_val = zero(ArbReal)
+        pivot_row, pivot_col = i, i
+
+        for r in i:n, c in i:n
+            a_rc = Aug[r, c]
+            mag = abs(a_rc)
+            if mag > pivot_val
+                pivot_val = mag
+                pivot_row, pivot_col = r, c
+            end
         end
-        
-        # Swap rows if necessary
+
+        @info "pivot[$i] = $(Aug[pivot_row, pivot_col])"
+
+        # Threshold check
+        if pivot_val < ε
+            error("Pivot too small at step $i (|pivot| = $pivot_val), system may be singular or ill-conditioned.")
+        end
+
+        # Swap rows
         if pivot_row != i
-            Augmented[i, :], Augmented[pivot_row, :] = Augmented[pivot_row, :], Augmented[i, :]
+            tmp_row = copy(Aug[i, :])
+            Aug[i, :] .= Aug[pivot_row, :]
+            Aug[pivot_row, :] .= tmp_row
+            row_perm[i], row_perm[pivot_row] = row_perm[pivot_row], row_perm[i]
         end
-        
-        # Normalize the pivot row
-        pivot = Augmented[i, i]
-        for k in 1:n+1
-            Augmented[i, k] /= pivot
+
+        # Swap columns (incl. col_perm tracking)
+        if pivot_col != i
+            tmp_col = copy(Aug[:, i])
+            Aug[:, i] .= Aug[:, pivot_col]
+            Aug[:, pivot_col] .= tmp_col
+            col_perm[i], col_perm[pivot_col] = col_perm[pivot_col], col_perm[i]
         end
-        
-        # Eliminate other rows
+
+        # Elimination
         for j in i+1:n
-            factor = Augmented[j, i]
-            for k in 1:n+1
-                Augmented[j, k] -= factor * Augmented[i, k]
+            f = Aug[j, i] / Aug[i, i]
+            for k in i:n+1
+                Aug[j, k] -= f * Aug[i, k]
             end
         end
     end
 
     # Back substitution
-    X = Vector{ArbComplex{128}}(undef, n)
+    x = zeros(ArbComplex{P}, n)
     for i in n:-1:1
-        # Start with the last element in the augmented matrix
-        X[i] = Augmented[i, n+1]
-        
-        # Subtract the known values of X from the right-hand side
+        x[i] = Aug[i, end]
         for j in i+1:n
-            X[i] -= Augmented[i, j] * X[j]
+            x[i] -= Aug[i, j] * x[j]
         end
+        x[i] /= Aug[i, i]
     end
-    
-    return X
-end
 
+    # Undo column swaps
+    x_corrected = similar(x)
+    for i in 1:n
+        x_corrected[col_perm[i]] = x[i]
+    end
+
+    return x_corrected
+end
 
 
 # Загружаем данные из файла
@@ -104,7 +185,7 @@ n = length(nont_zeros) + 1
 println("n = $n")
 
 # Создаем матрицу A размером n x n
-A = Matrix{ArbComplex{128}}(undef, n, n)
+A = Matrix{ArbComplex{1024}}(undef, n, n)
 
 # Заполнение матрицы A с учетом нулей дзета-функции
 for (i, nont_zero) in enumerate(nont_zeros)
@@ -112,41 +193,31 @@ for (i, nont_zero) in enumerate(nont_zeros)
 
     for k in 1:n
     
-        println("s_i is: ", s_i, "  k is: ", k, "  k ^ s_i is: ", k ^ s_i)
+        # println("s_i is: ", s_i, "  k is: ", k, "  k ^ s_i is: ", k ^ s_i)
         A[i, k] = k ^ -s_i
+        # println(A[i, k])
     end
 end
 
 # Добавление строки для a₁ = 1
-A[n, :] .= ArbComplex{128}(0, 0)
-A[n, 1] = ArbComplex{128}(1, 0)
+A[n, :] .= ArbComplex{1024}(0, 0)
+A[n, 1] = ArbComplex{1024}(1, 0)
+
+println(typeof(A))
 
 # Создание вектора B с комплексными числами
-B::Vector{ArbComplex{128}} = Vector{ArbComplex{128}}(undef, n)
-B[:] .= ArbComplex{128}(0, 0)
-B[end] = ArbComplex{128}(1, 0)
+B::Vector{ArbComplex{1024}} = Vector{ArbComplex{1024}}(undef, n)
+B[:] .= ArbComplex{1024}(0, 0)
+B[end] = ArbComplex{1024}(1, 0)
 
 for i in 1:(n - 1)
     row_str = join(["(" * @sprintf("%.4f", real(x)) * " + " * @sprintf("%.4f", imag(x)) * "im)" for x in A[i, :]], ", ")
-    println("before adding 1 to A[$i] is: [", row_str, "]")
+    # println("before adding 1 to A[$i] is: [", row_str, "]")
 end
 
-# Параметр регуляризации
-# λ = ArbReal(1e-6)
-
-# Создаём идентичную матрицу I для регуляризации (с типом ArbComplex)
-# II = Matrix{ArbComplex}(I, n, n)
-
-# A_transposed = Matrix(A')  # Convert Adjoint to a regular matrix
-
-# Apply regularization
-# A = A_transposed * A + λ * II
-# B = matvecmul(A_transposed, B)
-
-# Q, R = qr(A)
-
-# Solve using QR decomposition (R is upper triangular)
-# X = R \ (Q' * B)
+if any(x -> isnan(real(x)) || isnan(imag(x)), A)
+    error("Matrix A contains NaN values!")
+end
 
 # Solve the system using Gaussian elimination
 X = gaussian_elimination(A, B)
@@ -154,9 +225,9 @@ X = gaussian_elimination(A, B)
 
 # Получаем коэффициенты
 a_coeffs = [X[i] for i in 1:n]
-for k in 1:n
-    println("a_$k = $(a_coeffs[k])")
-end
+println("a_1 = $(a_coeffs[1])")
+# for k in 1:n
+# end
 
 # Функция для вычисления R(s)
 function RR(s, a_coeffs)
