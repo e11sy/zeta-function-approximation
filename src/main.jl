@@ -1,7 +1,9 @@
-using ArbNumerics
+include("gmres.jl")
+using .ArbGMRES
 using Printf
 using Plots
 using LinearAlgebra
+using ArbNumerics
 
 setprecision(1024)
 
@@ -100,78 +102,6 @@ end
 #     return X
 # end
 
-function gaussian_elimination(A::Matrix{ArbComplex{P}}, B::Vector{ArbComplex{P}}; ε=ArbReal("1e-40")) where P
-    n = size(A, 1)
-    Aug = hcat(A, B)  # Augmented matrix
-    row_perm = collect(1:n)
-    col_perm = collect(1:n)
-
-    for i in 1:n
-        # Full pivoting: search maximum absolute value in submatrix
-        pivot_val = zero(ArbReal)
-        pivot_row, pivot_col = i, i
-
-        for r in i:n, c in i:n
-            a_rc = Aug[r, c]
-            mag = abs(a_rc)
-            if mag > pivot_val
-                pivot_val = mag
-                pivot_row, pivot_col = r, c
-            end
-        end
-
-        @info "pivot[$i] = $(Aug[pivot_row, pivot_col])"
-
-        # Threshold check
-        if pivot_val < ε
-            error("Pivot too small at step $i (|pivot| = $pivot_val), system may be singular or ill-conditioned.")
-        end
-
-        # Swap rows
-        if pivot_row != i
-            tmp_row = copy(Aug[i, :])
-            Aug[i, :] .= Aug[pivot_row, :]
-            Aug[pivot_row, :] .= tmp_row
-            row_perm[i], row_perm[pivot_row] = row_perm[pivot_row], row_perm[i]
-        end
-
-        # Swap columns (incl. col_perm tracking)
-        if pivot_col != i
-            tmp_col = copy(Aug[:, i])
-            Aug[:, i] .= Aug[:, pivot_col]
-            Aug[:, pivot_col] .= tmp_col
-            col_perm[i], col_perm[pivot_col] = col_perm[pivot_col], col_perm[i]
-        end
-
-        # Elimination
-        for j in i+1:n
-            f = Aug[j, i] / Aug[i, i]
-            for k in i:n+1
-                Aug[j, k] -= f * Aug[i, k]
-            end
-        end
-    end
-
-    # Back substitution
-    x = zeros(ArbComplex{P}, n)
-    for i in n:-1:1
-        x[i] = Aug[i, end]
-        for j in i+1:n
-            x[i] -= Aug[i, j] * x[j]
-        end
-        x[i] /= Aug[i, i]
-    end
-
-    # Undo column swaps
-    x_corrected = similar(x)
-    for i in 1:n
-        x_corrected[col_perm[i]] = x[i]
-    end
-
-    return x_corrected
-end
-
-
 # Загружаем данные из файла
 zeros_filename = joinpath(@__DIR__, "assets", "zeta_zeros.txt")
 nont_zeros = read_zeta_zeros(zeros_filename)
@@ -212,22 +142,36 @@ B[end] = ArbComplex{1024}(1, 0)
 
 for i in 1:(n - 1)
     row_str = join(["(" * @sprintf("%.4f", real(x)) * " + " * @sprintf("%.4f", imag(x)) * "im)" for x in A[i, :]], ", ")
-    # println("before adding 1 to A[$i] is: [", row_str, "]")
+    println("before adding 1 to A[$i] is: [", row_str, "]")
 end
 
 if any(x -> isnan(real(x)) || isnan(imag(x)), A)
     error("Matrix A contains NaN values!")
 end
 
-# Solve the system using Gaussian elimination
-X = gaussian_elimination(A, B)
+# Solve the system using GMRES-like Iterative Solver with Preconditioner
+# X = solve_iterative(A, B, tol=ArbReal("1e-40"), maxiter=100)
 
+# Frobenius norm (just an example, you can use a different norm)
+
+# println("Condition number: ", condition_number)
+
+# X = gmres(A, B; tol=ArbReal{1024}(1e-10), maxiter=1000)
+
+# Perform LU decomposition (which might work with high precision)
+F = lu(A)
+
+# @info A
+# @info B
+
+# Solve the system A * x = b using the LU decomposition
+X = F \ B
 
 # Получаем коэффициенты
 a_coeffs = [X[i] for i in 1:n]
-println("a_1 = $(a_coeffs[1])")
-# for k in 1:n
-# end
+for k in 1:n
+    println("a_$(k) = $(X[k])")
+end
 
 # Функция для вычисления R(s)
 function RR(s, a_coeffs)
@@ -240,6 +184,7 @@ end
 
 # Генерируем точки x от -6 до 0
 x_vals = range(-6, stop=0, length=100)
+
 R_real_vals = [real(RR(ArbComplex(x, 0), a_coeffs)) for x in x_vals]
 
 # Строим график
